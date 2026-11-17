@@ -34,6 +34,7 @@ import 'package:PiliPlus/pages/video/introduction/ugc/widgets/action_item.dart';
 import 'package:PiliPlus/pages/video/introduction/ugc/widgets/menu_row.dart';
 import 'package:PiliPlus/pages/video/widgets/header_mixin.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
+import 'package:PiliPlus/plugin/pl_player/mini_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
 import 'package:PiliPlus/services/shutdown_timer_service.dart'
@@ -67,6 +68,7 @@ import 'package:intl/intl.dart' show DateFormat;
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
 import 'package:material_ui/material_ui.dart' hide showBottomSheet;
 import 'package:media_kit/media_kit.dart' show NativePlayer;
+import 'package:screen_brightness_platform_interface/screen_brightness_platform_interface.dart';
 
 mixin TimeBatteryMixin<T extends StatefulWidget> on State<T> {
   PlPlayerController get plPlayerController;
@@ -382,6 +384,44 @@ class HeaderControlState extends State<HeaderControl>
                   leading: const Icon(Icons.watch_later_outlined, size: 20),
                   title: const Text('添加至「稍后再看」', style: titleStyle),
                 ),
+                if (!isFullScreen &&
+                    !plPlayerController.isDesktopPip &&
+                    plPlayerController.playerCount == 1 &&
+                    plPlayerController.videoController != null)
+                  ListTile(
+                    dense: true,
+                    onTap: () {
+                      Get.back();
+                      Future.microtask(() {
+                        final player = videoDetailCtr.plPlayerController;
+                        final opened = MiniPlayerController.instance.open(
+                          player: player,
+                          args: videoDetailCtr.args,
+                          title: videoDetailCtr.titleForMiniPlayer,
+                        );
+                        if (opened) {
+                          player.resetScreenRotation();
+                          if (Platform.isAndroid &&
+                              !player.setSystemBrightness) {
+                            ScreenBrightnessPlatform.instance
+                                .resetApplicationScreenBrightness();
+                          }
+                          Get.back();
+                        } else {
+                          SmartDialog.showToast('视频尚未开始播放');
+                        }
+                      });
+                    },
+                    leading: const Icon(
+                      Icons.picture_in_picture_alt_outlined,
+                      size: 20,
+                    ),
+                    title: const Text('小窗播放', style: titleStyle),
+                    subtitle: const Text(
+                      '离开视频页后继续播放，可同时浏览其他页面',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
                 if (videoDetailCtr.epId == null)
                   ListTile(
                     dense: true,

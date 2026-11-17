@@ -79,6 +79,14 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
   static PlPlayerController? _instance;
 
+  /// Called right before a new player page acquires the shared instance.
+  /// The in-app mini player releases itself here so the new page starts from
+  /// a clean player.
+  static void Function()? onBeforeGetInstance;
+
+  /// Called after the shared player has been fully disposed.
+  static void Function(PlPlayerController player)? onDisposed;
+
   PlayerStatus playerStatus = .paused;
 
   final Rx<DataStatus> dataStatus = Rx(.none);
@@ -107,6 +115,11 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   }
 
   int _playerCount = 0;
+
+  /// Number of video/live pages currently using this shared player.
+  /// A mini player session is only safe when this is one: with stacked pages
+  /// the page below expects to take the player back when the top page pops.
+  int get playerCount => _playerCount;
 
   late double lastPlaybackSpeed = 1.0;
   final RxDouble _playbackSpeed = Pref.playSpeedDefault.obs;
@@ -378,6 +391,26 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     }
   }
 
+  /// Stops entering system PiP automatically. The in-app mini player uses
+  /// this on Android, where PiP would show the whole app (the list page and
+  /// the floating window) instead of only the video.
+  void disableAutoEnterPip() => _disableAutoEnterPip();
+
+  /// Stops reacting to device rotation. The mini player does not support
+  /// fullscreen, so orientation changes while browsing must not trigger it.
+  void stopOrientationListener() => _stopOrientationListener();
+
+  /// Restarts the device rotation listener after the mini player took over
+  /// and handed the player back to a video page.
+  void startOrientationListener() => _startOrientationListener();
+
+  /// Re-arms automatic PiP after the in-app mini player disabled it.
+  void restoreAutoEnterPip() {
+    if (!Platform.isAndroid || !autoPiP) return;
+    _isAutoEnterPip = true;
+    enterPip(autoEnter: true);
+  }
+
   void _disableAutoEnterPip() {
     if (_isAutoEnterPip) {
       if (Platform.isIOS) {
@@ -608,6 +641,17 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     _orientationListener = null;
   }
 
+  void _startOrientationListener() {
+    if (!PlatformUtils.isMobile || DeviceUtils.isChromeOS) return;
+    _stopOrientationListener();
+    _orientationListener = NativeDeviceOrientationPlatform.instance
+        .onOrientationChanged(
+          checkIsAutoRotate: checkIsAutoRotate,
+          angleDegrees: Platform.isAndroid ? Pref.angleDegrees : null,
+        )
+        .listen(_onOrientationChanged);
+  }
+
   void _onOrientationChanged(OrientationParams param) {
     _orientation = param.orientation;
     if (Platform.isIOS && !visible) return;
@@ -651,14 +695,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
   // 添加一个私有构造函数
   PlPlayerController._() {
-    if (PlatformUtils.isMobile && !DeviceUtils.isChromeOS) {
-      _orientationListener = NativeDeviceOrientationPlatform.instance
-          .onOrientationChanged(
-            checkIsAutoRotate: checkIsAutoRotate,
-            angleDegrees: Platform.isAndroid ? Pref.angleDegrees : null,
-          )
-          .listen(_onOrientationChanged);
-    }
+    _startOrientationListener();
 
     if (!Accounts.heartbeat.isLogin || Pref.historyPause) {
       enableHeart = false;
@@ -685,10 +722,13 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
   // 获取实例 传参
   static PlPlayerController getInstance({bool isLive = false}) {
+    onBeforeGetInstance?.call();
     // 如果实例尚未创建，则创建一个新实例
     return (_instance ??= PlPlayerController._())
       ..isLive = isLive
-      .._playerCount += 1;
+      .._playerCount += 1
+      .._startOrientationListener()
+      ..restoreAutoEnterPip();
   }
 
   bool _processing = false;
@@ -1699,6 +1739,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     _videoController = null;
     _instance = null;
     videoPlayerServiceHandler?.clear();
+    onDisposed?.call(this);
   }
 
   static void updatePlayCount() {

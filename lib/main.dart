@@ -9,6 +9,8 @@ import 'package:PiliPlus/common/widgets/scale_app.dart';
 import 'package:PiliPlus/common/widgets/scroll_behavior.dart';
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/models/common/theme/theme_color_type.dart';
+import 'package:PiliPlus/plugin/pl_player/mini_player/controller.dart';
+import 'package:PiliPlus/plugin/pl_player/mini_player/view.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
 import 'package:PiliPlus/router/app_pages.dart';
 import 'package:PiliPlus/services/account_service.dart';
@@ -111,7 +113,8 @@ void main() async {
   ]);
   Get
     ..lazyPut(AccountService.new)
-    ..lazyPut(DownloadService.new);
+    ..lazyPut(DownloadService.new)
+    ..put(MiniPlayerController(), permanent: true);
   HttpOverrides.global = _CustomHttpOverrides();
 
   if (PlatformUtils.isMobile) {
@@ -352,10 +355,16 @@ class MyApp extends StatelessWidget {
     if (PlatformUtils.isDesktop) {
       return BackDetector(
         onBack: _onBack,
-        child: child,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [child, const MiniPlayerOverlay()],
+        ),
       );
     }
-    return child;
+    return Stack(
+      fit: StackFit.expand,
+      children: [child, const MiniPlayerOverlay()],
+    );
   }
 
   /// from [DynamicColorBuilderState.initPlatformState]

@@ -797,6 +797,11 @@ abstract final class Pref {
   static bool get autoPiP =>
       _setting.get(SettingBoxKey.autoPiP, defaultValue: false);
 
+  static bool get miniOnBack => _setting.get(
+    SettingBoxKey.miniOnBack,
+    defaultValue: PlatformUtils.isMobile,
+  );
+
   static bool get enableSponsorBlock =>
       _setting.get(SettingBoxKey.enableSponsorBlock, defaultValue: false);
 

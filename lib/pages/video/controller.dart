@@ -93,6 +93,21 @@ class VideoDetailController extends GetxController
   late final String heroTag;
   late final RxString cover;
 
+  /// Title shown by the in-app mini player. Route arguments win because the
+  /// introduction may not have been loaded yet.
+  String? get titleForMiniPlayer {
+    if (args['title'] case final String title when title.isNotEmpty) {
+      return title;
+    }
+    try {
+      return isUgc
+          ? ugcIntroCtr.videoDetail.value.title
+          : pgcIntroCtr.pgcItem.title;
+    } catch (_) {
+      return null;
+    }
+  }
+
   // 视频类型 默认投稿视频
   late final VideoType videoType;
   @override
@@ -401,6 +416,11 @@ class VideoDetailController extends GetxController
   void onInit() {
     super.onInit();
     args = Get.arguments;
+    // The in-app mini player passes autoplay so expanding it continues
+    // playback without an extra tap.
+    if (args['autoplay'] == true) {
+      autoPlay = true;
+    }
     videoType = args['videoType'];
     if (videoType == VideoType.pgc) {
       if (!isLoginVideo) {

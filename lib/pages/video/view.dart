@@ -48,6 +48,7 @@ import 'package:PiliPlus/pages/video/widgets/header_control.dart';
 import 'package:PiliPlus/pages/video/widgets/intro_layout.dart';
 import 'package:PiliPlus/pages/video/widgets/player_focus.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
+import 'package:PiliPlus/plugin/pl_player/mini_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/fullscreen_mode.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
@@ -67,6 +68,7 @@ import 'package:PiliPlus/utils/num_utils.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
+import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart';
@@ -356,11 +358,18 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     }
 
     if (!videoDetailController.plPlayerController.isCloseAll) {
-      videoPlayerServiceHandler?.onVideoDetailDispose(heroTag);
-      if (plPlayerController != null) {
+      final miniPlayer = MiniPlayerController.instance;
+      if (miniPlayer.owns(videoDetailController.plPlayerController)) {
+        // The player has been handed over to the floating window. It must
+        // survive this page, even when this page never recorded the player
+        // in [plPlayerController] (pre-init or manual playback).
         videoDetailController.makeHeartBeat();
+      } else if (plPlayerController != null) {
+        videoDetailController.makeHeartBeat();
+        videoPlayerServiceHandler?.onVideoDetailDispose(heroTag);
         plPlayerController!.dispose();
       } else {
+        videoPlayerServiceHandler?.onVideoDetailDispose(heroTag);
         PlPlayerController.updatePlayCount();
       }
     }
@@ -383,18 +392,42 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
 
     introController.cancelTimer();
 
+    final player = videoDetailController.plPlayerController;
+    plPlayerController ??= player;
     videoDetailController
       ..videoState.value = false
       ..cancelBlockListener()
-      ..playerStatus = plPlayerController?.playerStatus
-      ..brightness = plPlayerController?.brightness.value;
-    if (plPlayerController != null) {
-      videoDetailController.makeHeartBeat();
-      plPlayerController!
-        ..removeStatusLister(playerListener)
-        ..removePositionListener(positionListener)
-        ..pause();
+      ..playerStatus = player.playerStatus
+      ..brightness = player.brightness.value
+      ..makeHeartBeat();
+    player
+      ..removeStatusLister(playerListener)
+      ..removePositionListener(positionListener);
+
+    if (_canMiniOnPush(player) &&
+        _openMiniPlayer(
+          fromPush: true,
+          videoRoute: ModalRoute.of(context),
+        )) {
+      // Keep playing: the hidden video page will take the player back when
+      // the user returns.
+      return;
     }
+    player.pause();
+  }
+
+  /// The user page is the only pushed page that turns the video into a mini
+  /// window. Other routes (for example the player settings sheet) keep the
+  /// existing pause behaviour.
+  bool _canMiniOnPush(PlPlayerController player) {
+    final route = Get.currentRoute;
+    final isMemberPage = route == '/member' || route.startsWith('/member?');
+    return Pref.miniOnBack &&
+        isMemberPage &&
+        !isFullScreen &&
+        player.playerStatus.isPlaying &&
+        player.playerCount == 1 &&
+        player.videoController != null;
   }
 
   @override
@@ -410,10 +443,26 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
 
     addObserverMobile(this);
 
-    plPlayerController?.isLive = false;
-    if (videoDetailController.plPlayerController.playerStatus.isPlaying &&
+    final player = videoDetailController.plPlayerController;
+    plPlayerController ??= player;
+
+    // When the up主 page was opened from this video page, the player was
+    // handed to the mini window. Take it back without recreating the player.
+    final tookBack = MiniPlayerController.instance.takeBackFromPush(
+      player,
+      ModalRoute.of(context),
+    );
+    if (identical(PlPlayerController.instance, player)) {
+      if (PlatformUtils.isMobile) {
+        player.startOrientationListener();
+      }
+      player.restoreAutoEnterPip();
+    }
+
+    player.isLive = false;
+    if (player.playerStatus.isPlaying &&
         videoDetailController.playerStatus != PlayerStatus.playing) {
-      videoDetailController.plPlayerController.pause();
+      player.pause();
     }
 
     _setPlayCallBack();
@@ -424,8 +473,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
         Platform.isAndroid &&
         !videoDetailController.setSystemBrightness) {
       if (videoDetailController.brightness != null) {
-        plPlayerController?.brightness.value =
-            videoDetailController.brightness!;
+        player.brightness.value = videoDetailController.brightness!;
         if (videoDetailController.brightness != -1.0) {
           ScreenBrightnessPlatform.instance.setApplicationScreenBrightness(
             videoDetailController.brightness!,
@@ -438,9 +486,17 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
       }
     }
 
-    plPlayerController
-      ?..addStatusLister(playerListener)
+    player
+      ..addStatusLister(playerListener)
       ..addPositionListener(positionListener);
+
+    if (tookBack) {
+      // The player is already playing at the right position; only the page
+      // rendering needs to be restored.
+      videoDetailController.videoState.value = true;
+      return;
+    }
+
     if (videoDetailController.autoPlay) {
       videoDetailController.playerInit(
         autoplay: videoDetailController.playerStatus?.isPlaying ?? false,
@@ -1200,6 +1256,60 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     ],
   );
 
+  /// Back navigation of the video page. When the in-app mini player takes
+  /// over, the page must not pause or dispose the player.
+  void _onPlayerPopInvoked(bool didPop, Object? result) {
+    final player = videoDetailController.plPlayerController;
+    if (didPop) {
+      if (MiniPlayerController.instance.owns(player)) {
+        return;
+      }
+      if (player.isCloseAll ||
+          !Pref.miniOnBack ||
+          !player.playerStatus.isPlaying ||
+          player.playerCount != 1 ||
+          player.videoController == null) {
+        player.onPopInvokedWithResult(didPop, result);
+        return;
+      }
+      if (_openMiniPlayer()) {
+        return;
+      }
+    }
+    player.onPopInvokedWithResult(didPop, result);
+  }
+
+  bool _openMiniPlayer({
+    bool fromPush = false,
+    Route<dynamic>? videoRoute,
+  }) {
+    final player = videoDetailController.plPlayerController;
+    final opened = MiniPlayerController.instance.open(
+      player: player,
+      args: videoDetailController.args,
+      title: videoDetailController.titleForMiniPlayer,
+      fromPush: fromPush,
+      videoRoute: videoRoute,
+      onClosed: fromPush ? _onMiniClosedFromPush : null,
+    );
+    if (opened) {
+      if (!fromPush) {
+        player.resetScreenRotation();
+      }
+      if (Platform.isAndroid && !player.setSystemBrightness) {
+        ScreenBrightnessPlatform.instance.resetApplicationScreenBrightness();
+      }
+    }
+    return opened;
+  }
+
+  void _onMiniClosedFromPush() {
+    final player = videoDetailController.plPlayerController;
+    videoDetailController
+      ..playedTime = Duration(milliseconds: player.positionInMilliseconds)
+      ..playerStatus = PlayerStatus.paused;
+  }
+
   Widget plPlayer({
     required double width,
     required double height,
@@ -1210,8 +1320,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
         !isFullScreen &&
         !videoDetailController.plPlayerController.isDesktopPip &&
         (videoDetailController.horizontalScreen || isPortrait),
-    onPopInvokedWithResult:
-        videoDetailController.plPlayerController.onPopInvokedWithResult,
+    onPopInvokedWithResult: _onPlayerPopInvoked,
     child: Obx(
       () =>
           !videoDetailController.videoState.value ||

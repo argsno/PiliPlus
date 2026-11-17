@@ -333,6 +333,13 @@ List<SettingsModel> get playSettings => [
       setKey: SettingBoxKey.continuePlayInBackground,
       defaultVal: false,
     ),
+  SwitchModel(
+    title: '离开视频页时小窗播放',
+    subtitle: '返回或进入UP主主页后继续播放，可同时浏览其他页面',
+    leading: const Icon(Icons.picture_in_picture_alt_outlined),
+    setKey: SettingBoxKey.miniOnBack,
+    defaultVal: PlatformUtils.isMobile,
+  ),
   if ((Platform.isAndroid && PiliAndroidHelper.isPipAvailable) ||
       (Platform.isIOS && IOSPipHelper.isAvailable))
     SwitchModel(
